@@ -1,0 +1,512 @@
+id = "Pid"
+survival = F
+frs_sub <- baseline_progression$PROACT_temporal$PROACT_ALSFRS_R
+frs_sub$fine <- frs_sub$Handwriting_4 + frs_sub$Cutting_5 + frs_sub$Dressing_Hygiene_6
+frs_sub$gross <- frs_sub$Turning_in_Bed_7 +frs_sub$Walking_8 + frs_sub$Climbing_Stairs_9
+##convert to dscores
+bl <- ddply(frs_sub, .(Pid),
+function(df) df = df[which.min(df$t), c("Pid", "ALSFRS_R_Total", "fine", "gross", "face", "chest")])
+baselines <- c("ALSFRS_R_Total_bl", "fine_bl", "gross_bl", "face_bl", "chest_bl")
+names(bl) <- c("Pid", baselines)
+####Engineer all of the potential response variables for this project.
+frs_sub <- merge(frs_sub, bl, by = "Pid")
+frs_sub$dscore <- frs_sub$ALSFRS_R_Total - frs_sub$ALSFRS_R_Total_bl
+frs_sub$d_fine <- frs_sub$fine - frs_sub$fine_bl
+frs_sub$d_gross <- frs_sub$gross - frs_sub$gross_bl
+frs_sub$d_face <- frs_sub$face - frs_sub$face_bl
+frs_sub$d_chest <- frs_sub$chest - frs_sub$chest_bl
+for(u in 1:length(baselines)){
+frs_sub[,baselines[u]] <- NULL
+}
+baseline_progression$PROACT_temporal$PROACT_ALSFRS_R <- frs_sub
+response <- get_response_fun(baseline_progression$PROACT_temporal, df., paste("d_", feature., sep =""), key.)
+response <- response[!is.na(response$t) & !is.na(response[,paste("d_", feature., sep ="")]),]
+####  This is likely to become unncessary, but we can hold onto it for the use of the survival and vistal capacity models
+frs_mash <- merge_overlapping_dataframes_from_list(baseline_progression$PROACT_temporal[1:2])
+frs_mash$Respiratory_10 <- frs_mash$Respiratory_10*3
+frs_mash$chest <- na_plus_fun(frs_mash$chest, frs_mash$Respiratory_10)
+frs_mash$chest[is.na(frs_mash$chest)] <- frs_mash$Respiratory_10[is.na(frs_mash$chest)]
+frs_mash$ALSFRS_R_bl <- frs_mash$chest + frs_mash$body + frs_mash$hand + frs_mash$face + frs_mash$leg
+# ### Unpack al the non-ALSFRS-related data from PRO-ACT and wrap it up
+#############################################
+#frs_mash <- frs_mash[!is.na(frs_mash$ALSFRS_R_bl) & !is.na(frs_mash$t),]
+frs_mash <- ddply(frs_mash, .(Pid), function(df) df = df[which.min(df$t),])
+static<- merge_multiple_data_fun(baseline_progression$PROACT_static, "Pid")
+static <- static[,!names(static) %in% c("time_event", "status")]
+temporal <- merge_multiple_data_fun(baseline_progression$PROACT_temporal[3:length(baseline_progression$PROACT_temporal)], c("Pid", "t"))
+temporal <- ddply(temporal, .(Pid), function(df) df = df[which.min(df$t),])
+proact_patient_data <- merge(temporal, static, by = "Pid", all = T)
+#####Merge FRS and everything else######
+proact_baseline_progression <- merge(frs_mash[,!names(frs_mash) %in% "t"], proact_patient_data[,!names(proact_patient_data) %in% "t"], by = c("Pid"), all = T)
+proact_baseline_progression <- proact_baseline_progression[!is.na(proact_baseline_progression$ALSFRS_R_bl),]
+proact_baseline_progression$fvc.1[is.na(proact_baseline_progression$fvc.1)] <-
+proact_baseline_progression$svc.1[is.na(proact_baseline_progression$fvc.1)]
+###### Engineering variables ###########
+###Optional, this was something we did specifically for Voyager
+proact_baseline_progression$preslope <- (proact_baseline_progression$ALSFRS_R_Total - 48)/proact_baseline_progression$onset_delta
+proact_baseline_progression$pred_fvc <- NA
+males <- which(proact_baseline_progression$gender == "Male" & !is.na(proact_baseline_progression$gender) &
+!is.na(proact_baseline_progression$height) & !is.na(proact_baseline_progression$age))
+proact_baseline_progression$pred_fvc[males] <- exp(-10.258 + 2.28*log(proact_baseline_progression$height[males]) +
+0.00676*proact_baseline_progression$age[males] - 0.000124*((proact_baseline_progression$age[males])^2))
+females <- which(proact_baseline_progression$gender == "Female" & !is.na(proact_baseline_progression$gender) &
+!is.na(proact_baseline_progression$height) & !is.na(proact_baseline_progression$age))
+proact_baseline_progression$pred_fvc[females] <- exp(-9.069 + 2.013*log(proact_baseline_progression$height[females]) +
+0.00847*proact_baseline_progression$age[females] - 0.000155*((proact_baseline_progression$age[females])^2))
+proact_baseline_progression$fvc_pp <- (proact_baseline_progression$fvc.1/proact_baseline_progression$pred_fvc)*100
+proact_baseline_progression$bmi <- proact_baseline_progression$weight/(proact_baseline_progression$height)^2
+proact_baseline_progression$onset_bulbar[is.na(proact_baseline_progression$onset_bulbar)] <- 0
+proact_baseline_progression$onset_bulbar <- factor(proact_baseline_progression$onset_bulbar, levels = c(0,1))
+proact_baseline_progression$onset_limb[is.na(proact_baseline_progression$onset_limb)] <- 0
+proact_baseline_progression$onset_limb <- factor(proact_baseline_progression$onset_limb, levels = c(0,1))
+proact_baseline_progression$bmi <- proact_baseline_progression$bmi*10000
+names(proact_baseline_progression)[which(names(proact_baseline_progression) == "svc.1")] <- "svc_bl"
+missing_vars <- data.frame(cbind(names(proact_baseline_progression),
+apply(proact_baseline_progression, 2, function(df) missing = (length(df[is.na(df)])/length(df))*100)),
+stringsAsFactors = F)
+missing_vars[,2] <- as.numeric(missing_vars[,2])
+present_features <- as.vector(missing_vars[,1][missing_vars[,2] < 66])
+proact_baseline_progression <- proact_baseline_progression[,present_features]
+#proact_baseline_progression <- proact_baseline_progression[,Q.]
+names(proact_baseline_progression)[which(names(proact_baseline_progression) == feature.)] = paste(feature., "_bl", sep = '')
+proact_training_validation <-  merge(response, proact_baseline_progression[,!names(proact_baseline_progression) %in% paste("d_", feature., sep = "")]
+, by = "Pid", all.x = T)
+response <- get_response_fun(baseline_progression$PROACT_temporal, df., paste("d_", feature., sep =""), key.)
+rm(list = ls())
+require(PROACTdataPrep)
+require(plyr)
+baseline_progression <- PROACT_data_prep(if_training_data = T, if_engineering = F,
+look_back_window = 30, predictive_window = 9999,
+response = "ALSFRS_R", imp_threshold = 1, bl_end = F)
+source('C:/Users/ataylor/Google Drive/Origent Project Files/20 SciTechDev/Data/ALS/Cytokinetics_model_dev/internalExternalValidation/R/cal_rmsd_fun.R')
+source('C:/Users/ataylor/Google Drive/Origent Project Files/20 SciTechDev/Data/ALS/Cytokinetics_model_dev/modelBuildValidate/R/get_response_fun.R')
+### Progression test
+list. = baseline_progression$PROACT_temporal
+df. = "PROACT_ALSFRS_R"
+feature. = "chest"
+key. = c("Pid", "t")
+tune_parameter = data.frame(t(c(150, 5, 0.1, 10)))
+tune. = tune_parameter
+f.=NULL
+id = "Pid"
+survival = F
+####Gross and fine response variables
+frs_sub <- baseline_progression$PROACT_temporal$PROACT_ALSFRS_R
+frs_sub$fine <- frs_sub$Handwriting_4 + frs_sub$Cutting_5 + frs_sub$Dressing_Hygiene_6
+frs_sub$gross <- frs_sub$Turning_in_Bed_7 +frs_sub$Walking_8 + frs_sub$Climbing_Stairs_9
+##convert to dscores
+bl <- ddply(frs_sub, .(Pid),
+function(df) df = df[which.min(df$t), c("Pid", "ALSFRS_R_Total", "fine", "gross", "face", "chest")])
+baselines <- c("ALSFRS_R_Total_bl", "fine_bl", "gross_bl", "face_bl", "chest_bl")
+names(bl) <- c("Pid", baselines)
+####Engineer all of the potential response variables for this project.
+frs_sub <- merge(frs_sub, bl, by = "Pid")
+frs_sub$dscore <- frs_sub$ALSFRS_R_Total - frs_sub$ALSFRS_R_Total_bl
+frs_sub$d_fine <- frs_sub$fine - frs_sub$fine_bl
+frs_sub$d_gross <- frs_sub$gross - frs_sub$gross_bl
+frs_sub$d_face <- frs_sub$face - frs_sub$face_bl
+frs_sub$d_chest <- frs_sub$chest - frs_sub$chest_bl
+for(u in 1:length(baselines)){
+frs_sub[,baselines[u]] <- NULL
+}
+baseline_progression$PROACT_temporal$PROACT_ALSFRS_R <- frs_sub
+response <- get_response_fun(baseline_progression$PROACT_temporal, df., paste("d_", feature., sep =""), key.)
+response <- response[!is.na(response$t) & !is.na(response[,paste("d_", feature., sep ="")]),]
+frs_mash <- merge_overlapping_dataframes_from_list(baseline_progression$PROACT_temporal[1:2])
+frs_mash$Respiratory_10 <- frs_mash$Respiratory_10*3
+frs_mash$chest <- na_plus_fun(frs_mash$chest, frs_mash$Respiratory_10)
+frs_mash$chest[is.na(frs_mash$chest)] <- frs_mash$Respiratory_10[is.na(frs_mash$chest)]
+frs_mash$ALSFRS_R_bl <- frs_mash$chest + frs_mash$body + frs_mash$hand + frs_mash$face + frs_mash$leg
+# ### Unpack al the non-ALSFRS-related data from PRO-ACT and wrap it up
+#############################################
+#frs_mash <- frs_mash[!is.na(frs_mash$ALSFRS_R_bl) & !is.na(frs_mash$t),]
+frs_mash <- ddply(frs_mash, .(Pid), function(df) df = df[which.min(df$t),])
+static<- merge_multiple_data_fun(baseline_progression$PROACT_static, "Pid")
+static <- static[,!names(static) %in% c("time_event", "status")]
+temporal <- merge_multiple_data_fun(baseline_progression$PROACT_temporal[3:length(baseline_progression$PROACT_temporal)], c("Pid", "t"))
+temporal <- ddply(temporal, .(Pid), function(df) df = df[which.min(df$t),])
+proact_patient_data <- merge(temporal, static, by = "Pid", all = T)
+#####Merge FRS and everything else######
+proact_baseline_progression <- merge(frs_mash[,!names(frs_mash) %in% "t"], proact_patient_data[,!names(proact_patient_data) %in% "t"], by = c("Pid"), all = T)
+proact_baseline_progression <- proact_baseline_progression[!is.na(proact_baseline_progression$ALSFRS_R_bl),]
+proact_baseline_progression$fvc.1[is.na(proact_baseline_progression$fvc.1)] <-
+proact_baseline_progression$svc.1[is.na(proact_baseline_progression$fvc.1)]
+###### Engineering variables ###########
+###Optional, this was something we did specifically for Voyager
+proact_baseline_progression$preslope <- (proact_baseline_progression$ALSFRS_R_Total - 48)/proact_baseline_progression$onset_delta
+proact_baseline_progression$pred_fvc <- NA
+males <- which(proact_baseline_progression$gender == "Male" & !is.na(proact_baseline_progression$gender) &
+!is.na(proact_baseline_progression$height) & !is.na(proact_baseline_progression$age))
+proact_baseline_progression$pred_fvc[males] <- exp(-10.258 + 2.28*log(proact_baseline_progression$height[males]) +
+0.00676*proact_baseline_progression$age[males] - 0.000124*((proact_baseline_progression$age[males])^2))
+females <- which(proact_baseline_progression$gender == "Female" & !is.na(proact_baseline_progression$gender) &
+!is.na(proact_baseline_progression$height) & !is.na(proact_baseline_progression$age))
+proact_baseline_progression$pred_fvc[females] <- exp(-9.069 + 2.013*log(proact_baseline_progression$height[females]) +
+0.00847*proact_baseline_progression$age[females] - 0.000155*((proact_baseline_progression$age[females])^2))
+proact_baseline_progression$fvc_pp <- (proact_baseline_progression$fvc.1/proact_baseline_progression$pred_fvc)*100
+proact_baseline_progression$bmi <- proact_baseline_progression$weight/(proact_baseline_progression$height)^2
+proact_baseline_progression$onset_bulbar[is.na(proact_baseline_progression$onset_bulbar)] <- 0
+proact_baseline_progression$onset_bulbar <- factor(proact_baseline_progression$onset_bulbar, levels = c(0,1))
+proact_baseline_progression$onset_limb[is.na(proact_baseline_progression$onset_limb)] <- 0
+proact_baseline_progression$onset_limb <- factor(proact_baseline_progression$onset_limb, levels = c(0,1))
+proact_baseline_progression$bmi <- proact_baseline_progression$bmi*10000
+names(proact_baseline_progression)[which(names(proact_baseline_progression) == "svc.1")] <- "svc_bl"
+missing_vars <- data.frame(cbind(names(proact_baseline_progression),
+apply(proact_baseline_progression, 2, function(df) missing = (length(df[is.na(df)])/length(df))*100)),
+stringsAsFactors = F)
+missing_vars[,2] <- as.numeric(missing_vars[,2])
+present_features <- as.vector(missing_vars[,1][missing_vars[,2] < 66])
+proact_baseline_progression <- proact_baseline_progression[,present_features]
+#proact_baseline_progression <- proact_baseline_progression[,Q.]
+names(proact_baseline_progression)[which(names(proact_baseline_progression) == feature.)] = paste(feature., "_bl", sep = '')
+frs_mash <- merge_overlapping_dataframes_from_list(baseline_progression$PROACT_temporal[1:2])
+require(PROACTdataPrep)
+require(plyr)
+require(gbm)
+require(caret)
+require(PROACTdataPrep)
+require(dataEval)
+require(survivalROC)
+require(survival)
+require(plyr)
+rm(list = ls())
+require(gbm)
+require(caret)
+require(PROACTdataPrep)
+require(dataEval)
+require(survivalROC)
+require(survival)
+require(plyr)
+baseline_progression <- PROACT_data_prep(if_training_data = T, if_engineering = F,
+look_back_window = 30, predictive_window = 9999,
+response = "ALSFRS_R", imp_threshold = 1, bl_end = F)
+source('C:/Users/ataylor/Google Drive/Origent Project Files/20 SciTechDev/Data/ALS/Cytokinetics_model_dev/internalExternalValidation/R/cal_rmsd_fun.R')
+source('C:/Users/ataylor/Google Drive/Origent Project Files/20 SciTechDev/Data/ALS/Cytokinetics_model_dev/modelBuildValidate/R/get_response_fun.R')
+### Progression test
+list. = baseline_progression$PROACT_temporal
+df. = "PROACT_ALSFRS_R"
+feature. = "chest"
+key. = c("Pid", "t")
+tune_parameter = data.frame(t(c(150, 5, 0.1, 10)))
+tune. = tune_parameter
+f.=NULL
+id = "Pid"
+survival = F
+####Gross and fine response variables
+frs_sub <- baseline_progression$PROACT_temporal$PROACT_ALSFRS_R
+frs_sub$fine <- frs_sub$Handwriting_4 + frs_sub$Cutting_5 + frs_sub$Dressing_Hygiene_6
+frs_sub$gross <- frs_sub$Turning_in_Bed_7 +frs_sub$Walking_8 + frs_sub$Climbing_Stairs_9
+##convert to dscores
+bl <- ddply(frs_sub, .(Pid),
+function(df) df = df[which.min(df$t), c("Pid", "ALSFRS_R_Total", "fine", "gross", "face", "chest")])
+baselines <- c("ALSFRS_R_Total_bl", "fine_bl", "gross_bl", "face_bl", "chest_bl")
+names(bl) <- c("Pid", baselines)
+####Engineer all of the potential response variables for this project.
+frs_sub <- merge(frs_sub, bl, by = "Pid")
+frs_sub$dscore <- frs_sub$ALSFRS_R_Total - frs_sub$ALSFRS_R_Total_bl
+frs_sub$d_fine <- frs_sub$fine - frs_sub$fine_bl
+frs_sub$d_gross <- frs_sub$gross - frs_sub$gross_bl
+frs_sub$d_face <- frs_sub$face - frs_sub$face_bl
+frs_sub$d_chest <- frs_sub$chest - frs_sub$chest_bl
+for(u in 1:length(baselines)){
+frs_sub[,baselines[u]] <- NULL
+}
+baseline_progression$PROACT_temporal$PROACT_ALSFRS_R <- frs_sub
+response <- get_response_fun(baseline_progression$PROACT_temporal, df., paste("d_", feature., sep =""), key.)
+response <- response[!is.na(response$t) & !is.na(response[,paste("d_", feature., sep ="")]),]
+frs_mash <- merge_overlapping_dataframes_from_list(baseline_progression$PROACT_temporal[1:2])
+frs_mash$Respiratory_10 <- frs_mash$Respiratory_10*3
+frs_mash$chest <- na_plus_fun(frs_mash$chest, frs_mash$Respiratory_10)
+frs_mash$chest[is.na(frs_mash$chest)] <- frs_mash$Respiratory_10[is.na(frs_mash$chest)]
+frs_mash$ALSFRS_R_bl <- frs_mash$chest + frs_mash$body + frs_mash$hand + frs_mash$face + frs_mash$leg
+frs_mash <- ddply(frs_mash, .(Pid), function(df) df = df[which.min(df$t),])
+static<- merge_multiple_data_fun(baseline_progression$PROACT_static, "Pid")
+static <- static[,!names(static) %in% c("time_event", "status")]
+temporal <- merge_multiple_data_fun(baseline_progression$PROACT_temporal[3:length(baseline_progression$PROACT_temporal)], c("Pid", "t"))
+temporal <- ddply(temporal, .(Pid), function(df) df = df[which.min(df$t),])
+proact_patient_data <- merge(temporal, static, by = "Pid", all = T)
+proact_baseline_progression <- merge(frs_mash[,!names(frs_mash) %in% "t"], proact_patient_data[,!names(proact_patient_data) %in% "t"], by = c("Pid"), all = T)
+proact_baseline_progression <- proact_baseline_progression[!is.na(proact_baseline_progression$ALSFRS_R_bl),]
+proact_baseline_progression$fvc.1[is.na(proact_baseline_progression$fvc.1)] <-
+proact_baseline_progression$svc.1[is.na(proact_baseline_progression$fvc.1)]
+###### Engineering variables ###########
+###Optional, this was something we did specifically for Voyager
+proact_baseline_progression$preslope <- (proact_baseline_progression$ALSFRS_R_Total - 48)/proact_baseline_progression$onset_delta
+proact_baseline_progression$pred_fvc <- NA
+males <- which(proact_baseline_progression$gender == "Male" & !is.na(proact_baseline_progression$gender) &
+!is.na(proact_baseline_progression$height) & !is.na(proact_baseline_progression$age))
+proact_baseline_progression$pred_fvc[males] <- exp(-10.258 + 2.28*log(proact_baseline_progression$height[males]) +
+0.00676*proact_baseline_progression$age[males] - 0.000124*((proact_baseline_progression$age[males])^2))
+females <- which(proact_baseline_progression$gender == "Female" & !is.na(proact_baseline_progression$gender) &
+!is.na(proact_baseline_progression$height) & !is.na(proact_baseline_progression$age))
+proact_baseline_progression$pred_fvc[females] <- exp(-9.069 + 2.013*log(proact_baseline_progression$height[females]) +
+0.00847*proact_baseline_progression$age[females] - 0.000155*((proact_baseline_progression$age[females])^2))
+proact_baseline_progression$fvc_pp <- (proact_baseline_progression$fvc.1/proact_baseline_progression$pred_fvc)*100
+proact_baseline_progression$bmi <- proact_baseline_progression$weight/(proact_baseline_progression$height)^2
+proact_baseline_progression$onset_bulbar[is.na(proact_baseline_progression$onset_bulbar)] <- 0
+proact_baseline_progression$onset_bulbar <- factor(proact_baseline_progression$onset_bulbar, levels = c(0,1))
+proact_baseline_progression$onset_limb[is.na(proact_baseline_progression$onset_limb)] <- 0
+proact_baseline_progression$onset_limb <- factor(proact_baseline_progression$onset_limb, levels = c(0,1))
+proact_baseline_progression$bmi <- proact_baseline_progression$bmi*10000
+names(proact_baseline_progression)[which(names(proact_baseline_progression) == "svc.1")] <- "svc_bl"
+missing_vars <- data.frame(cbind(names(proact_baseline_progression),
+apply(proact_baseline_progression, 2, function(df) missing = (length(df[is.na(df)])/length(df))*100)),
+stringsAsFactors = F)
+missing_vars[,2] <- as.numeric(missing_vars[,2])
+present_features <- as.vector(missing_vars[,1][missing_vars[,2] < 66])
+proact_baseline_progression <- proact_baseline_progression[,present_features]
+#proact_baseline_progression <- proact_baseline_progression[,Q.]
+names(proact_baseline_progression)[which(names(proact_baseline_progression) == feature.)] = paste(feature., "_bl", sep = '')
+proact_training_validation <-  merge(response, proact_baseline_progression[,!names(proact_baseline_progression) %in% paste("d_", feature., sep = "")]
+, by = "Pid", all.x = T)
+View(proact_training_validation)
+proact_training_validation <- impute_avg_fun(proact_training_validation)
+proact_training_validation=ddply(proact_training_validation, .(Pid), function(df) df = df[-which.min(df$t),])
+data <- impute_avg_fun(data)
+data = proact_training_validation
+algorithm = 'gbm'
+response = paste("d_", feature., sep ="")
+f=f.
+id = "Pid"
+k = 10
+tune = tune.
+unique_id <- as.data.frame(unique(data[,id]));
+names(unique_id) <- id;
+unique_id$group <- round(runif(nrow(unique_id), min=0, max=k));
+unique_id$group[unique_id$group == 0] <- k;
+data <- merge(data, unique_id, by = id);
+error <- rep(NA,k);
+pred_all<-data[1,];
+pred_all$pred  <-  NA
+if (is.null(f) & !is.null(id)){
+f <- as.formula(paste(response, "~", paste(names(data)[!names(data) %in% c(response, id, "group")], collapse="+")));
+}
+importance <- list()
+i=5
+tdat <- data[data$group!=i,];
+gbm_fit <- gbm(f, data=tdat, n.tree= tune[1,1],
+distribution='gaussian', interaction.depth = tune[1,2], shrinkage = tune[1,3], n.minobsinnode = tune[1,4]);
+pred <- data.frame(t(predict(gbm_fit, newdata = data[data$group == i,],n.trees=tune[1,1])))
+pred <- data.frame(predict(gbm_fit, newdata = data[data$group == i,],n.trees=tune[1,1]))
+names(pred) <- "d_pred"
+View(pred)
+View(data)
+remove.packages("modelBuildValidate")
+remove.packages("internalExternalValidation")
+q()
+x    <- rnorm(100, mean = 5, sd = 5)  # Old Faithful Geyser data
+hist(x)
+faithful[, 2]
+library(shiny)
+runApp(list(
+ui = basicPage(
+h2('The mtcars data'),
+dataTableOutput('mytable')
+),
+server = function(input, output) {
+output$mytable = renderDataTable({
+mtcars
+})
+}
+))
+test <- data.frame(x = c(1:100), y = 3:103)
+test <- data.frame(x = c(1:100), y = 3:102)
+runApp(list(
+ui = basicPage(
+h2('The mtcars data'),
+dataTableOutput('mytable')
+),
+server = function(input, output) {
+output$mytable = renderDataTable({
+test
+})
+}
+))
+test <- rbind(c(3030, 5050), x)
+runApp(list(
+ui = basicPage(
+h2('The mtcars data'),
+dataTableOutput('mytable')
+),
+server = function(input, output) {
+output$mytable = renderDataTable({
+test
+})
+}
+))
+test <- data.frame(x = c(1:100), y = 3:102)
+test <- rbind(c(3030, 5050), x)
+View(test)
+test <- data.frame(x = c(1:100), y = 3:102)
+runApp(list(
+ui = basicPage(
+h2('example data frame'),
+dataTableOutput('mytable')
+),
+server = function(input, output) {
+output$mytable = renderDataTable({
+test
+})
+}
+))
+library(shiny)
+test <- c(paste(getwd()))#load("train_data")
+runApp(list(
+ui = basicPage(
+h2('example data frame'),
+dataTableOutput('mytable')
+),
+server = function(input, output) {
+output$mytable = renderDataTable({
+test
+})
+}
+))
+library(shiny)
+test <- data.frame(x = c(paste(getwd())))#load("train_data")
+runApp(list(
+ui = basicPage(
+h2('example data frame'),
+dataTableOutput('mytable')
+),
+server = function(input, output) {
+output$mytable = renderDataTable({
+test
+})
+}
+))
+library(shiny)
+test <- data.frame(x = c(paste(getwd())))#load("train_data")
+runApp(list(
+ui = basicPage(
+h2('example data frame'),
+dataTableOutput('mytable')
+),
+server = function(input, output) {
+output$mytable = renderDataTable({
+test
+})
+}
+))
+shiny::runApp('C:/Users/ataylor/Desktop')
+ui <- fluidPage(
+sliderInput(inputId = "slider_1",
+label = "numbers",
+value = 5, min = 100, max = 1000),
+plotOutput('hist')
+)
+ui <- fluidPage(
+sliderInput(inputId = "slider_1",
+label = "numbers",
+value = 5,
+min = 100,
+max = 1000),
+plotOutput('hist')
+)
+runApp('C:/Users/ataylor/Desktop')
+runApp('C:/Users/ataylor/Desktop')
+runApp('C:/Users/ataylor/Desktop')
+hist(rnorm(100))
+library(shiny)
+runApp('C:/Users/ataylor/Desktop')
+shiny::runApp('C:/Users/ataylor/Desktop')
+runApp('C:/Users/ataylor/Desktop')
+ui <- fluidPage(
+plotOutput("hist")
+)
+runApp('C:/Users/ataylor/Desktop')
+library(shiny)
+ui <- fluidPage(
+sliderInput(inputId = "slider", value = 5, min = 1, max = 10),
+plotOutput("hist")
+)
+server <- function(input, output){
+output$hist <- renderPlot({
+hist(rnorm(100), breaks = input$slider)
+})
+}
+shinyApp(ui = ui, server = server)
+ui <- fluidPage(
+sliderInput(inputId = "slider", value = 5, min = 1, max = 10),
+plotOutput("hist")
+)
+input$slider
+}
+source('C:/Users/ataylor/Desktop/shiny/server.R', echo=TRUE)
+runApp('C:/Users/ataylor/Desktop/shiny')
+library(dataEval)
+library(DT)
+install.packages("DT")
+library(DT)
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+data("PROACT_ALSFRS_R")
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+shiny::runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+diamonds2 = PROACTdataPrep::PROACT_ALSFRS_R[1:100, 1:10]
+PROACTdataPrep::PROACT_ALSFRS_R
+diamonds2 = data("PROACT_ALSFRS_R")
+diamonds2 = diamonds2[1:100, 1:10]
+diamonds2 = diamonds2[c(1:100), 1:10]
+output$mytable1 <- DT::renderDataTable({
+DT::datatable(diamonds2[, input$show_vars, drop = FALSE])
+})
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+DT::datatable(diamonds2[, input$show_vars, drop = FALSE])
+function(input, output) {
+# choose columns to display
+diamonds2 = data("PROACT_ALSFRS_R")
+output$mytable1 <- DT::renderDataTable({
+DT::datatable(diamonds2[, input$show_vars, drop = FALSE])
+})
+# sorted columns are colored now because CSS are attached to them
+output$mytable2 <- DT::renderDataTable({
+DT::datatable(mtcars, options = list(orderClasses = TRUE))
+})
+# customize the length drop-down menu; display 5 rows per page by default
+output$mytable3 <- DT::renderDataTable({
+DT::datatable(iris, options = list(lengthMenu = c(5, 30, 50), pageLength = 5))
+})
+}
+DT::datatable(diamonds2[, input$show_vars, drop = FALSE])
+diamonds2 = data("PROACT_ALSFRS_R")
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+diamonds2 = PROACT_ALSFRS_R[1:100,1:10]
+DT::datatable(diamonds2[, drop = FALSE])
+runApp('C:/Users/ataylor/Desktop/shiny')
+runApp('C:/Users/ataylor/Desktop/shiny')
+sd
+var
+c_cov
+library(INPUTdataprep)
+library(dataEval)
+library(PROACTdataPrep)
+library(plyr)
+library(caret)
+library(randomForest)
+library(gbm)
+library(Hmisc)
+get_rmsd_fun
+sd
+library(PROACTdataPrep)
+PROACT_data_prep(if_engineering = F, if_training_data = F)
+view(PROACT_vc)
+view("PROACT_vc")
+View(PROACT_time_records)
+View(PROACT_patient_att)
+get_slope_fun(PROACT_ALSFRS_R, "t", "hand", "Pid")
+setwd("C:/Users/ataylor/Desktop/test_project/code")
+setwd("C:/Users/ataylor/Desktop/test_project")
+x <- read.csv("Data/all_360_day_predictions.csv")
+save(x, file = "Data/r_binary_test")
